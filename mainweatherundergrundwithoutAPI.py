@@ -3,14 +3,14 @@ import calendar
 import numpy as np
 import pandas as pd
 import folium
-import time
+import platform  # <-- NEW: Allows Python to check if you are on Windows or Linux
 from folium.plugins import Draw
 from streamlit_folium import st_folium
 from scipy.spatial.distance import cdist
 from shapely.geometry import Polygon as ShapelyPolygon, Point, MultiPoint, box
 from shapely.ops import voronoi_diagram
 
-# --- NEW SCRAPING IMPORTS ---
+# --- SCRAPING IMPORTS ---
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -18,12 +18,12 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 from bs4 import BeautifulSoup
 
 # ==========================================
 # --- Configuration & Data (NO APIs NEEDED) ---
 # ==========================================
-# to run use this  streamlit run mainweatherundergrundwithoutAPI.py
 # Using the original Weather Underground Station IDs
 stations = [
     [45.48, 35.55, "IKANIS1", "Hawber Station"],
@@ -36,7 +36,6 @@ stations = [
 @st.cache_data(show_spinner=False)
 def scrape_monthly_data(year, month):
     """Uses a high-speed invisible Chrome browser to scrape WU graph summaries."""
-    # Find the last day of the selected month
     _, num_days = calendar.monthrange(year, month)
 
     results = []
@@ -46,24 +45,29 @@ def scrape_monthly_data(year, month):
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-
-    # --- SPEED UPGRADE: Turbo Mode ---
-    # Tells Chrome to grab the data instantly without waiting for images or ads to finish loading
+    chrome_options.add_argument("--disable-gpu")
     chrome_options.page_load_strategy = 'eager'
 
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    # --- SMART OS DETECTION ---
+    # Automatically chooses the right driver based on your current machine
+    if platform.system() == "Linux":
+        # If running on Streamlit Cloud
+        driver_service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+    else:
+        # If running locally on your Windows computer
+        driver_service = Service(ChromeDriverManager().install())
+
+    driver = webdriver.Chrome(service=driver_service, options=chrome_options)
 
     for lon, lat, st_id, name in stations:
         monthly_total_mm = 0.0
 
-        # --- SPEED UPGRADE: Using your new Graph URL ---
-        # Notice we use num_days so it targets the exact end of the month!
+        # Target the high-speed Graph summary URL
         url = f"https://www.wunderground.com/dashboard/pws/{st_id}/graph/{year}-{month:02d}-{num_days:02d}/{year}-{month:02d}-{num_days:02d}/monthly"
 
         try:
             driver.get(url)
 
-            # Wait for the summary module to appear
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".summary-table, table, .dashboard__summary"))
             )
@@ -71,13 +75,11 @@ def scrape_monthly_data(year, month):
             html = driver.page_source
             soup = BeautifulSoup(html, 'lxml')
 
-            # Read all tables on the summary page
             tables = pd.read_html(str(soup))
 
             for df in tables:
                 df_str = df.astype(str)
 
-                # Look for the Precipitation row
                 if df_str.apply(lambda row: row.astype(str).str.contains('Precipitation', case=False).any(),
                                 axis=1).any():
                     precip_row = df[
@@ -89,7 +91,6 @@ def scrape_monthly_data(year, month):
 
                         if clean_val:
                             val = float(clean_val)
-                            # Convert inches to mm if necessary
                             if 'in' in val_str.lower() or val < 30.0:
                                 monthly_total_mm = val * 25.4
                             else:
@@ -99,13 +100,12 @@ def scrape_monthly_data(year, month):
         except Exception as e:
             st.warning(f"⚠️ Could not scrape {name}: The station may be offline or the page timed out.")
 
-        # Save the data for this station!
         results.append([lon, lat, monthly_total_mm, name])
 
-    # Close the invisible browser
     driver.quit()
 
     return np.array(results, dtype=object)
+
 
 # ==========================================
 # --- UI Layout ---
@@ -189,8 +189,7 @@ st.write("### 2. Precipitation Results")
 if st.button("🧮 Calculate EUD", type="primary", use_container_width=True):
 
     with st.spinner(
-            f"Booting Web Scraper... Extracting data from Weather Underground for {calendar.month_name[selected_month]} {selected_year} (This takes ~45 seconds)..."):
-        # Launch the invisible browser and scrape!
+            f"Booting Web Scraper... Extracting data from Weather Underground for {calendar.month_name[selected_month]} {selected_year} (This takes ~30 seconds)..."):
         data = scrape_monthly_data(selected_year, selected_month)
         precip = np.array(data[:, 2], dtype=float)
 
