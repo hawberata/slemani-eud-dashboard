@@ -1,0 +1,11 @@
+streamlit
+numpy
+pandas
+folium
+streamlit-folium
+scipy
+shapely
+selenium
+webdriver-manager
+beautifulsoup4
+lxml
