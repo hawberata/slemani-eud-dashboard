@@ -22,7 +22,7 @@ from webdriver_manager.core.os_manager import ChromeType
 from bs4 import BeautifulSoup
 
 # ==========================================
-# --- Configuration & Data (NO APIs NEEDED) ---
+# --- Configuration & Data (NO APIs NEEDED) ---to run use this streamlit run mainweatherundergrundwithoutAPI.py
 # ==========================================
 # Using the original Weather Underground Station IDs
 stations = [
@@ -35,7 +35,7 @@ stations = [
 
 @st.cache_data(show_spinner=False)
 def scrape_monthly_data(year, month):
-    """Uses a high-speed invisible Chrome browser to scrape WU graph summaries."""
+    """Uses a stealthy, high-speed invisible Chrome browser to scrape WU."""
     _, num_days = calendar.monthrange(year, month)
 
     results = []
@@ -46,29 +46,43 @@ def scrape_monthly_data(year, month):
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")  # Forces the site to render desktop view
+
+    # --- NEW: STEALTH ARMOR ---
+    # 1. Fake a normal Windows Chrome User-Agent (hides the "Headless" tag)
+    chrome_options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    # 2. Disable the flag that tells websites "This browser is automated"
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
+
     chrome_options.page_load_strategy = 'eager'
 
-    # --- SMART OS DETECTION ---
-    # Automatically chooses the right driver based on your current machine
+    # Smart OS Detection
     if platform.system() == "Linux":
-        # If running on Streamlit Cloud
         driver_service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
     else:
-        # If running locally on your Windows computer
         driver_service = Service(ChromeDriverManager().install())
 
     driver = webdriver.Chrome(service=driver_service, options=chrome_options)
 
+    # Double check that Selenium removes its own bot footprint
+    driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+        "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
     for lon, lat, st_id, name in stations:
         monthly_total_mm = 0.0
 
-        # Target the high-speed Graph summary URL
         url = f"https://www.wunderground.com/dashboard/pws/{st_id}/graph/{year}-{month:02d}-{num_days:02d}/{year}-{month:02d}-{num_days:02d}/monthly"
 
         try:
             driver.get(url)
 
-            WebDriverWait(driver, 10).until(
+            # --- NEW: INCREASED TIMEOUT ---
+            # Cloud servers are slower, give it up to 30 seconds to find the table
+            WebDriverWait(driver, 30).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".summary-table, table, .dashboard__summary"))
             )
 
@@ -98,7 +112,9 @@ def scrape_monthly_data(year, month):
                             break
 
         except Exception as e:
-            st.warning(f"⚠️ Could not scrape {name}: The station may be offline or the page timed out.")
+            # --- NEW: PRINT THE REAL ERROR ---
+            # Instead of a generic message, print exactly what went wrong
+            st.warning(f"⚠️ Could not scrape {name}. Error: {str(e)[:100]}...")
 
         results.append([lon, lat, monthly_total_mm, name])
 
