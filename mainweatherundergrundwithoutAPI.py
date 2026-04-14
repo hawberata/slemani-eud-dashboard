@@ -3,7 +3,8 @@ import calendar
 import numpy as np
 import pandas as pd
 import folium
-import platform  # <-- NEW: Allows Python to check if you are on Windows or Linux
+import platform
+from io import StringIO  # <-- NEW: Tells Pandas to read text instead of file paths
 from folium.plugins import Draw
 from streamlit_folium import st_folium
 from scipy.spatial.distance import cdist
@@ -19,10 +20,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
-from bs4 import BeautifulSoup
 
 # ==========================================
-# --- Configuration & Data (NO APIs NEEDED) ---to run use this streamlit run mainweatherundergrundwithoutAPI.py
+# --- Configuration & Data (NO APIs NEEDED) ---
 # ==========================================
 # Using the original Weather Underground Station IDs
 stations = [
@@ -46,13 +46,11 @@ def scrape_monthly_data(year, month):
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")  # Forces the site to render desktop view
+    chrome_options.add_argument("--window-size=1920,1080")
 
-    # --- NEW: STEALTH ARMOR ---
-    # 1. Fake a normal Windows Chrome User-Agent (hides the "Headless" tag)
+    # Stealth Armor
     chrome_options.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    # 2. Disable the flag that tells websites "This browser is automated"
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option('useAutomationExtension', False)
@@ -80,16 +78,14 @@ def scrape_monthly_data(year, month):
         try:
             driver.get(url)
 
-            # --- NEW: INCREASED TIMEOUT ---
-            # Cloud servers are slower, give it up to 30 seconds to find the table
             WebDriverWait(driver, 30).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, ".summary-table, table, .dashboard__summary"))
             )
 
             html = driver.page_source
-            soup = BeautifulSoup(html, 'lxml')
 
-            tables = pd.read_html(str(soup))
+            # --- THE FIX: Wrapping the HTML string in StringIO ---
+            tables = pd.read_html(StringIO(html))
 
             for df in tables:
                 df_str = df.astype(str)
@@ -112,8 +108,6 @@ def scrape_monthly_data(year, month):
                             break
 
         except Exception as e:
-            # --- NEW: PRINT THE REAL ERROR ---
-            # Instead of a generic message, print exactly what went wrong
             st.warning(f"⚠️ Could not scrape {name}. Error: {str(e)[:100]}...")
 
         results.append([lon, lat, monthly_total_mm, name])
@@ -205,7 +199,7 @@ st.write("### 2. Precipitation Results")
 if st.button("🧮 Calculate EUD", type="primary", use_container_width=True):
 
     with st.spinner(
-            f"Booting Web Scraper... Extracting data from Weather Underground for {calendar.month_name[selected_month]} {selected_year} (This takes ~30 seconds)..."):
+            f"Booting Web Scraper... Extracting data from Weather Underground for {calendar.month_name[selected_month]} {selected_year}..."):
         data = scrape_monthly_data(selected_year, selected_month)
         precip = np.array(data[:, 2], dtype=float)
 
