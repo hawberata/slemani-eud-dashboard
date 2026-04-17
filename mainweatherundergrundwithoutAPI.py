@@ -4,12 +4,14 @@ import numpy as np
 import pandas as pd
 import folium
 import platform
+import matplotlib.subplots as plt_sub 
 import matplotlib.pyplot as plt
 from datetime import datetime
 from io import StringIO
 from folium.plugins import Draw
 from streamlit_folium import st_folium
 from scipy.spatial.distance import cdist
+from scipy.interpolate import Rbf         
 from shapely.geometry import Polygon as ShapelyPolygon, Point, MultiPoint, box
 from shapely.ops import voronoi_diagram
 
@@ -45,11 +47,10 @@ def get_month_year_range(start_year, start_month, end_year, end_month):
     months_to_scrape = []
     
     if start_date > end_date:
-        return [] # Invalid range
+        return [] 
         
     curr_y, curr_m = start_year, start_month
     while datetime(curr_y, curr_m, 1) <= end_date:
-        # Stop if we hit a future month that hasn't happened yet
         if curr_y > current_year or (curr_y == current_year and curr_m > current_month):
             break 
             
@@ -64,7 +65,6 @@ def get_month_year_range(start_year, start_month, end_year, end_month):
 
 @st.cache_data(show_spinner=False)
 def scrape_weather_data(months_to_scrape, station_data):
-    """Scrapes data for a specific list of (Year, Month) tuples."""
     results = []
     
     chrome_options = Options()
@@ -110,7 +110,7 @@ def scrape_weather_data(months_to_scrape, station_data):
                                 valid_months_found += 1
                                 break
             except Exception:
-                pass # Skip offline months
+                pass 
 
         if valid_months_found == 0:
             final_total = None
@@ -150,25 +150,26 @@ with st.sidebar:
     st.divider()
     st.header("Report Parameters")
     
-    # --- ADDED: Custom Season UI ---
     time_period = st.radio("Time Period", ["Single Month", "Custom Season / Date Range"])
-    
-    months_to_scrape = [] # Will hold our list of targets
+    months_to_scrape = [] 
     
     if time_period == "Single Month":
+        # --- ADDED 2022 HERE ---
         selected_year = st.selectbox("Select Year", [2026, 2025, 2024, 2023, 2022], index=0)
         selected_month = st.selectbox("Select Month", list(range(1, 13)), index=2, format_func=lambda x: calendar.month_name[x])
         months_to_scrape = [(selected_year, selected_month)]
     else:
-        st.info("💡 **Custom Range:** Perfect for a Hydrological Year (e.g., Oct 2025 to jun 2026).")
+        st.info("💡 **Custom Range:** Perfect for a Hydrological Year (e.g., Oct 2025 to May 2026).")
         colA, colB = st.columns(2)
         with colA:
             st.write("**Start Date**")
-            start_month = st.selectbox("Start Month", list(range(1, 13)), index=8, format_func=lambda x: calendar.month_name[x]) # Default Sept
+            start_month = st.selectbox("Start Month", list(range(1, 13)), index=8, format_func=lambda x: calendar.month_name[x]) 
+            # --- ADDED 2022 HERE ---
             start_year = st.selectbox("Start Year", [2026, 2025, 2024, 2023, 2022], index=1)
         with colB:
             st.write("**End Date**")
-            end_month = st.selectbox("End Month", list(range(1, 13)), index=4, format_func=lambda x: calendar.month_name[x]) # Default May
+            end_month = st.selectbox("End Month", list(range(1, 13)), index=4, format_func=lambda x: calendar.month_name[x]) 
+            # --- ADDED 2022 HERE ---
             end_year = st.selectbox("End Year", [2026, 2025, 2024, 2023, 2022], index=0)
             
         months_to_scrape = get_month_year_range(start_year, start_month, end_year, end_month)
@@ -178,7 +179,22 @@ with st.sidebar:
         elif not months_to_scrape:
             st.warning("⚠️ Selected dates are in the future.")
 
-    calc_method = st.radio("Calculation Method", ["Arithmetic Mean", "Thiessen Polygons (Geographic)", "Isohyetal (IDW Interpolation)"], index=1)
+    calc_method = st.radio("Calculation Method", ["Arithmetic Mean", "Thiessen Polygons (Geographic)", "Isohyetal (Interpolation)"], index=1)
+    
+    interp_type = "IDW" 
+    contour_levels = 15 
+    
+    if calc_method == "Isohyetal (Interpolation)":
+        st.markdown("---")
+        st.markdown("**Isohyetal Settings**")
+        interp_type = st.radio("Interpolation Algorithm", [
+            "Inverse Distance Weighting (IDW)", 
+            "Radial Basis Function (RBF)"
+        ], help="IDW creates 'bullseyes' around stations. RBF creates smooth, connected topological contours.")
+        
+        contour_levels = st.slider("Contour Levels", min_value=5, max_value=50, value=15, step=1)
+        st.markdown("---")
+
     show_zones = st.checkbox("Show Station Influence Zones", value=True)
 
 # Process ALL Stations for Map Display
@@ -226,7 +242,6 @@ st_folium(m, width=1000, height=500, key="catchment_map", returned_objects=["las
 st.divider()
 st.write("### 2. Precipitation Results")
 
-# Disable button if range is invalid
 calc_disabled = len(months_to_scrape) == 0
 
 if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, disabled=calc_disabled):
@@ -235,10 +250,8 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
     
     with st.spinner(loading_msg):
         data = scrape_weather_data(months_to_scrape, st.session_state.station_list)
-
         valid_data = [row for row in data if row[2] is not None]
 
-        # Display the metrics
         cols = st.columns(len(data))
         for i, row in enumerate(data):
             if row[2] is not None:
@@ -246,7 +259,6 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
             else:
                 cols[i].metric(label=row[3], value="Offline", delta="No data found", delta_color="off")
 
-        # If ALL stations are offline, stop the math!
         if len(valid_data) == 0:
             st.error("❌ All stations are offline or missing data in this timeframe. Cannot calculate EUD.")
         else:
@@ -287,7 +299,7 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
                 else:
                     st.warning("⚠️ Please draw a polygon on the map first, then click Calculate.")
                     
-            elif calc_method == "Isohyetal (IDW Interpolation)":
+            elif calc_method == "Isohyetal (Interpolation)":
                 if active_drawing:
                     min_lon, min_lat, max_lon, max_lat = bounding_shape.bounds
                     grid_lon, grid_lat = np.meshgrid(np.linspace(min_lon, max_lon, 150),
@@ -298,21 +310,28 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
                     inside_points = grid_points[mask]
 
                     if len(inside_points) > 0:
-                        dist_matrix = cdist(inside_points, active_coords)
-                        dist_matrix = np.where(dist_matrix == 0, 1e-10, dist_matrix)
-                        weights = 1.0 / (dist_matrix**2)
-                        interpolated_values = np.sum(weights * active_precip, axis=1) / np.sum(weights, axis=1)
+                        
+                        if "IDW" in interp_type:
+                            dist_matrix = cdist(inside_points, active_coords)
+                            dist_matrix = np.where(dist_matrix == 0, 1e-10, dist_matrix)
+                            weights = 1.0 / (dist_matrix**2)
+                            interpolated_values = np.sum(weights * active_precip, axis=1) / np.sum(weights, axis=1)
+                            label = "IDW"
+                        else:
+                            rbf = Rbf(active_coords[:, 0], active_coords[:, 1], active_precip, function='linear')
+                            interpolated_values = rbf(inside_points[:, 0], inside_points[:, 1])
+                            label = "RBF"
                         
                         isohyetal_eud = np.mean(interpolated_values)
-                        st.success(f"**Final Area-Weighted Isohyetal (IDW) EUD:** {isohyetal_eud:.2f} mm")
+                        st.success(f"**Final Area-Weighted Isohyetal ({label}) EUD:** {isohyetal_eud:.2f} mm")
                         
-                        st.write("#### Isohyetal Contour Map")
+                        st.write(f"#### Isohyetal Contour Map ({label})")
                         
                         fig, ax = plt.subplots(figsize=(8, 5))
                         full_grid = np.full(grid_lon.shape, np.nan)
                         full_grid.ravel()[mask] = interpolated_values
                         
-                        cp = ax.contourf(grid_lon, grid_lat, full_grid, cmap='Blues', levels=10, alpha=0.8)
+                        cp = ax.contourf(grid_lon, grid_lat, full_grid, cmap='Blues', levels=contour_levels, alpha=0.8)
                         plt.colorbar(cp, label='Precipitation (mm)')
                         
                         x, y = bounding_shape.exterior.xy
