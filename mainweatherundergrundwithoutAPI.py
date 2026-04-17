@@ -156,20 +156,20 @@ with st.sidebar:
     months_to_scrape = [] # Will hold our list of targets
     
     if time_period == "Single Month":
-        selected_year = st.selectbox("Select Year", [2026, 2025, 2024, 2023], index=0)
+        selected_year = st.selectbox("Select Year", [2026, 2025, 2024, 2023, 2022], index=0)
         selected_month = st.selectbox("Select Month", list(range(1, 13)), index=2, format_func=lambda x: calendar.month_name[x])
         months_to_scrape = [(selected_year, selected_month)]
     else:
-        st.info("💡 **Custom Range:** Perfect for a Hydrological Year (e.g., Oct 2025 to May 2026).")
+        st.info("💡 **Custom Range:** Perfect for a Hydrological Year (e.g., Oct 2025 to jun 2026).")
         colA, colB = st.columns(2)
         with colA:
             st.write("**Start Date**")
             start_month = st.selectbox("Start Month", list(range(1, 13)), index=8, format_func=lambda x: calendar.month_name[x]) # Default Sept
-            start_year = st.selectbox("Start Year", [2026, 2025, 2024, 2023], index=1)
+            start_year = st.selectbox("Start Year", [2026, 2025, 2024, 2023, 2022], index=1)
         with colB:
             st.write("**End Date**")
             end_month = st.selectbox("End Month", list(range(1, 13)), index=4, format_func=lambda x: calendar.month_name[x]) # Default May
-            end_year = st.selectbox("End Year", [2026, 2025, 2024, 2023], index=0)
+            end_year = st.selectbox("End Year", [2026, 2025, 2024, 2023, 2022], index=0)
             
         months_to_scrape = get_month_year_range(start_year, start_month, end_year, end_month)
         
