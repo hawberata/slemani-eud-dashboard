@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 import folium
 import platform
-import matplotlib.pyplot as plt  # <--- Added this for the contour map
+import matplotlib.pyplot as plt
+from datetime import datetime
 from io import StringIO
 from folium.plugins import Draw
 from streamlit_folium import st_folium
@@ -33,22 +34,44 @@ if 'station_list' not in st.session_state:
         {"lon": 45.44, "lat": 35.57, "id": "I90583618", "name": "UOS-oldcampus"}
     ]
 
+# --- HELPER: Generate a list of (Year, Month) tuples between two dates ---
+def get_month_year_range(start_year, start_month, end_year, end_month):
+    current_year = datetime.now().year
+    current_month = datetime.now().month
+    
+    start_date = datetime(start_year, start_month, 1)
+    end_date = datetime(end_year, end_month, 1)
+    
+    months_to_scrape = []
+    
+    if start_date > end_date:
+        return [] # Invalid range
+        
+    curr_y, curr_m = start_year, start_month
+    while datetime(curr_y, curr_m, 1) <= end_date:
+        # Stop if we hit a future month that hasn't happened yet
+        if curr_y > current_year or (curr_y == current_year and curr_m > current_month):
+            break 
+            
+        months_to_scrape.append((curr_y, curr_m))
+        
+        curr_m += 1
+        if curr_m > 12:
+            curr_m = 1
+            curr_y += 1
+            
+    return months_to_scrape
 
 @st.cache_data(show_spinner=False)
-def scrape_monthly_data(year, month, station_data):
-    """Uses a stealthy invisible Chrome browser to scrape WU."""
-    _, num_days = calendar.monthrange(year, month)
+def scrape_weather_data(months_to_scrape, station_data):
+    """Scrapes data for a specific list of (Year, Month) tuples."""
     results = []
-
+    
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.page_load_strategy = 'eager'
 
     if platform.system() == "Linux":
@@ -60,38 +83,44 @@ def scrape_monthly_data(year, month, station_data):
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
     for s in station_data:
-        # --- THE FIX: Default to None (Offline) instead of 0.0 ---
-        monthly_total_mm = None
-        url = f"https://www.wunderground.com/dashboard/pws/{s['id']}/graph/{year}-{month:02d}-{num_days:02d}/{year}-{month:02d}-{num_days:02d}/monthly"
+        accumulated_mm = 0.0
+        valid_months_found = 0
 
-        try:
-            driver.get(url)
-            WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.CSS_SELECTOR, ".summary-table, table")))
-            html = driver.page_source
-            tables = pd.read_html(StringIO(html))
+        for y, m in months_to_scrape:
+            _, num_days = calendar.monthrange(y, m)
+            url = f"https://www.wunderground.com/dashboard/pws/{s['id']}/graph/{y}-{m:02d}-{num_days:02d}/{y}-{m:02d}-{num_days:02d}/monthly"
 
-            for df in tables:
-                df_str = df.astype(str)
-                if df_str.apply(lambda row: row.astype(str).str.contains('Precipitation', case=False).any(),
-                                axis=1).any():
-                    precip_row = df[
-                        df.apply(lambda row: row.astype(str).str.contains('Precipitation', case=False).any(), axis=1)]
-                    if not precip_row.empty:
-                        val_str = str(precip_row.iloc[0].values[1])
-                        clean_val = ''.join(c for c in val_str if c.isdigit() or c == '.')
-                        if clean_val:
-                            val = float(clean_val)
-                            monthly_total_mm = val * 25.4 if ('in' in val_str.lower() or val < 30.0) else val
-                            break
-        except Exception as e:
-            # Silently catch the error, monthly_total_mm stays 'None'
-            pass
+            try:
+                driver.get(url)
+                WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.CSS_SELECTOR, ".summary-table, table")))
+                html = driver.page_source
+                tables = pd.read_html(StringIO(html))
 
-        results.append([s['lon'], s['lat'], monthly_total_mm, s['name']])
+                for df in tables:
+                    df_str = df.astype(str)
+                    if df_str.apply(lambda row: row.astype(str).str.contains('Precipitation', case=False).any(), axis=1).any():
+                        precip_row = df[df.apply(lambda row: row.astype(str).str.contains('Precipitation', case=False).any(), axis=1)]
+                        if not precip_row.empty:
+                            val_str = str(precip_row.iloc[0].values[1])
+                            clean_val = ''.join(c for c in val_str if c.isdigit() or c == '.')
+                            if clean_val:
+                                val = float(clean_val)
+                                val_mm = val * 25.4 if 'in' in val_str.lower() else val
+                                accumulated_mm += val_mm
+                                valid_months_found += 1
+                                break
+            except Exception:
+                pass # Skip offline months
+
+        if valid_months_found == 0:
+            final_total = None
+        else:
+            final_total = accumulated_mm
+
+        results.append([s['lon'], s['lat'], final_total, s['name']])
 
     driver.quit()
     return np.array(results, dtype=object)
-
 
 # ==========================================
 # --- UI Layout ---
@@ -120,15 +149,36 @@ with st.sidebar:
 
     st.divider()
     st.header("Report Parameters")
-    selected_year = st.selectbox("Select Year", [2026, 2025, 2024], index=0)
-    selected_month = st.selectbox("Select Month", list(range(1, 13)), index=2,
-                                  format_func=lambda x: calendar.month_name[x])
+    
+    # --- ADDED: Custom Season UI ---
+    time_period = st.radio("Time Period", ["Single Month", "Custom Season / Date Range"])
+    
+    months_to_scrape = [] # Will hold our list of targets
+    
+    if time_period == "Single Month":
+        selected_year = st.selectbox("Select Year", [2026, 2025, 2024, 2023], index=0)
+        selected_month = st.selectbox("Select Month", list(range(1, 13)), index=2, format_func=lambda x: calendar.month_name[x])
+        months_to_scrape = [(selected_year, selected_month)]
+    else:
+        st.info("💡 **Custom Range:** Perfect for a Hydrological Year (e.g., Oct 2025 to May 2026).")
+        colA, colB = st.columns(2)
+        with colA:
+            st.write("**Start Date**")
+            start_month = st.selectbox("Start Month", list(range(1, 13)), index=8, format_func=lambda x: calendar.month_name[x]) # Default Sept
+            start_year = st.selectbox("Start Year", [2026, 2025, 2024, 2023], index=1)
+        with colB:
+            st.write("**End Date**")
+            end_month = st.selectbox("End Month", list(range(1, 13)), index=4, format_func=lambda x: calendar.month_name[x]) # Default May
+            end_year = st.selectbox("End Year", [2026, 2025, 2024, 2023], index=0)
+            
+        months_to_scrape = get_month_year_range(start_year, start_month, end_year, end_month)
+        
+        if not months_to_scrape and (start_year > end_year or (start_year == end_year and start_month > end_month)):
+            st.error("⚠️ Start date must be before End date!")
+        elif not months_to_scrape:
+            st.warning("⚠️ Selected dates are in the future.")
 
-    # --- ADDED: The 3rd Isohyetal option in the radio button ---
-    calc_method = st.radio("Calculation Method",
-                           ["Arithmetic Mean", "Thiessen Polygons (Geographic)", "Isohyetal (IDW Interpolation)"],
-                           index=1)
-
+    calc_method = st.radio("Calculation Method", ["Arithmetic Mean", "Thiessen Polygons (Geographic)", "Isohyetal (IDW Interpolation)"], index=1)
     show_zones = st.checkbox("Show Station Influence Zones", value=True)
 
 # Process ALL Stations for Map Display
@@ -176,34 +226,37 @@ st_folium(m, width=1000, height=500, key="catchment_map", returned_objects=["las
 st.divider()
 st.write("### 2. Precipitation Results")
 
-if st.button("🧮 Calculate EUD", type="primary", use_container_width=True):
-    with st.spinner("Extracting data..."):
-        # Scrape all stations
-        data = scrape_monthly_data(selected_year, selected_month, st.session_state.station_list)
+# Disable button if range is invalid
+calc_disabled = len(months_to_scrape) == 0
 
-        # --- THE FIX: Filter out any station that returned 'None' ---
+if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, disabled=calc_disabled):
+    
+    loading_msg = f"Extracting {len(months_to_scrape)} months of data for all stations (this may take a few minutes)..."
+    
+    with st.spinner(loading_msg):
+        data = scrape_weather_data(months_to_scrape, st.session_state.station_list)
+
         valid_data = [row for row in data if row[2] is not None]
 
-        # Display the metrics for ALL stations so you know which ones failed
+        # Display the metrics
         cols = st.columns(len(data))
         for i, row in enumerate(data):
             if row[2] is not None:
                 cols[i].metric(label=row[3], value=f"{row[2]:.2f} mm")
             else:
-                cols[i].metric(label=row[3], value="Offline", delta="Excluded from math", delta_color="off")
+                cols[i].metric(label=row[3], value="Offline", delta="No data found", delta_color="off")
 
         # If ALL stations are offline, stop the math!
         if len(valid_data) == 0:
-            st.error("❌ All stations are offline or missing data for this month. Cannot calculate EUD.")
+            st.error("❌ All stations are offline or missing data in this timeframe. Cannot calculate EUD.")
         else:
-            # Rebuild the math arrays using ONLY the surviving, valid stations
             active_precip = np.array([row[2] for row in valid_data], dtype=float)
             active_coords = np.array([[row[0], row[1]] for row in valid_data], dtype=float)
             active_names = [row[3] for row in valid_data]
 
             if len(valid_data) < len(data):
                 st.warning(
-                    f"⚠️ Warning: {len(data) - len(valid_data)} station(s) were offline. The Thiessen network has automatically re-balanced using only the {len(valid_data)} active stations.")
+                    f"⚠️ Warning: {len(data) - len(valid_data)} station(s) were offline. The network has automatically re-balanced using only active stations.")
 
             if calc_method == "Arithmetic Mean":
                 st.success(f"**Final Arithmetic Mean EUD:** {np.mean(active_precip):.2f} mm")
@@ -217,7 +270,6 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True):
                     inside_points = np.array([pt for pt in grid_points if bounding_shape.contains(Point(pt))])
 
                     if len(inside_points) > 0:
-                        # Math now relies strictly on 'active_coords'
                         closest_station = np.argmin(cdist(inside_points, active_coords), axis=1)
                         thiessen_eud = sum(
                             (np.sum(closest_station == i) / len(inside_points)) * active_precip[i] for i in
@@ -234,54 +286,47 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True):
                         st.warning("The drawn polygon is too small. Please draw a larger boundary.")
                 else:
                     st.warning("⚠️ Please draw a polygon on the map first, then click Calculate.")
-
-            # --- ADDED: Isohyetal block with contour map generation ---
+                    
             elif calc_method == "Isohyetal (IDW Interpolation)":
                 if active_drawing:
                     min_lon, min_lat, max_lon, max_lat = bounding_shape.bounds
                     grid_lon, grid_lat = np.meshgrid(np.linspace(min_lon, max_lon, 150),
                                                      np.linspace(min_lat, max_lat, 150))
                     grid_points = np.c_[grid_lon.ravel(), grid_lat.ravel()]
-
-                    # Create a boolean mask of points inside the drawn polygon
+                    
                     mask = np.array([bounding_shape.contains(Point(pt)) for pt in grid_points])
                     inside_points = grid_points[mask]
 
                     if len(inside_points) > 0:
-                        # Inverse Distance Weighting math
                         dist_matrix = cdist(inside_points, active_coords)
-                        dist_matrix = np.where(dist_matrix == 0, 1e-10, dist_matrix)  # Avoid division by zero
-                        weights = 1.0 / (dist_matrix ** 2)
+                        dist_matrix = np.where(dist_matrix == 0, 1e-10, dist_matrix)
+                        weights = 1.0 / (dist_matrix**2)
                         interpolated_values = np.sum(weights * active_precip, axis=1) / np.sum(weights, axis=1)
-
+                        
                         isohyetal_eud = np.mean(interpolated_values)
                         st.success(f"**Final Area-Weighted Isohyetal (IDW) EUD:** {isohyetal_eud:.2f} mm")
-
+                        
                         st.write("#### Isohyetal Contour Map")
-
-                        # Build the contour plot
+                        
                         fig, ax = plt.subplots(figsize=(8, 5))
                         full_grid = np.full(grid_lon.shape, np.nan)
                         full_grid.ravel()[mask] = interpolated_values
-
+                        
                         cp = ax.contourf(grid_lon, grid_lat, full_grid, cmap='Blues', levels=15, alpha=0.8)
                         plt.colorbar(cp, label='Precipitation (mm)')
-
-                        # Draw polygon boundary
+                        
                         x, y = bounding_shape.exterior.xy
                         ax.plot(x, y, color='#333333', linewidth=2, label='Catchment Boundary')
-
-                        # Plot stations
-                        ax.scatter(active_coords[:, 0], active_coords[:, 1], color='red', s=40, label='Stations',
-                                   zorder=5)
+                        
+                        ax.scatter(active_coords[:,0], active_coords[:,1], color='red', s=40, label='Stations', zorder=5)
                         for i, name in enumerate(active_names):
-                            ax.annotate(name, (active_coords[i, 0], active_coords[i, 1]),
-                                        textcoords="offset points", xytext=(5, 5), ha='left', fontsize=8)
-
+                            ax.annotate(name, (active_coords[i,0], active_coords[i,1]), 
+                                        textcoords="offset points", xytext=(5,5), ha='left', fontsize=8)
+                            
                         ax.set_xlabel("Longitude")
                         ax.set_ylabel("Latitude")
                         ax.legend()
-
+                        
                         st.pyplot(fig)
                     else:
                         st.warning("The drawn polygon is too small. Please draw a larger boundary.")
