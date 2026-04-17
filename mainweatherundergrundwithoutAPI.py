@@ -212,7 +212,7 @@ else:
     bounding_shape = box(all_coords[:, 0].min() - margin, all_coords[:, 1].min() - margin,
                          all_coords[:, 0].max() + margin, all_coords[:, 1].max() + margin)
 
-m = folium.Map(location=[35.56, 45.68], zoom_start=11, tiles="CartoDB positron")
+m = folium.Map(location=[35.56, 45.64], zoom_start=11, tiles="CartoDB positron")
 
 if show_zones and len(all_coords) >= 2:
     large_bbox = box(all_coords[:, 0].min() - 2, all_coords[:, 1].min() - 2, all_coords[:, 0].max() + 2,
