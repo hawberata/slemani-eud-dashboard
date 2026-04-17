@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 import folium
 import platform
-from io import StringIO  # <-- NEW: Tells Pandas to read text instead of file paths
+import matplotlib.pyplot as plt  # <--- Added this for the contour map
+from io import StringIO
 from folium.plugins import Draw
 from streamlit_folium import st_folium
 from scipy.spatial.distance import cdist
@@ -22,98 +23,73 @@ from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 
 # ==========================================
-# --- Configuration & Data (NO APIs NEEDED) ---
+# --- INITIAL STATION LIST ---
 # ==========================================
-# Using the original Weather Underground Station IDs
-stations = [
-    [45.48, 35.55, "IKANIS1", "Hawber Station"],
-    [45.37, 35.58, "IQALIA1", "UOS-new campus"],
-    [45.36, 35.54, "I90583621", "UOS-Bakrajo"],
-    [45.44, 35.57, "I90583618", "UOS-oldcampus"]
-]
+if 'station_list' not in st.session_state:
+    st.session_state.station_list = [
+        {"lon": 45.48, "lat": 35.55, "id": "IKANIS1", "name": "Hawber Station"},
+        {"lon": 45.37, "lat": 35.58, "id": "IQALIA1", "name": "UOS-new campus"},
+        {"lon": 45.36, "lat": 35.54, "id": "I90583621", "name": "UOS-Bakrajo"},
+        {"lon": 45.44, "lat": 35.57, "id": "I90583618", "name": "UOS-oldcampus"}
+    ]
 
 
 @st.cache_data(show_spinner=False)
-def scrape_monthly_data(year, month):
-    """Uses a stealthy, high-speed invisible Chrome browser to scrape WU."""
+def scrape_monthly_data(year, month, station_data):
+    """Uses a stealthy invisible Chrome browser to scrape WU."""
     _, num_days = calendar.monthrange(year, month)
-
     results = []
 
-    # Setup the invisible Chrome browser
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
-
-    # Stealth Armor
     chrome_options.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
-
     chrome_options.page_load_strategy = 'eager'
 
-    # Smart OS Detection
     if platform.system() == "Linux":
         driver_service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
     else:
         driver_service = Service(ChromeDriverManager().install())
 
     driver = webdriver.Chrome(service=driver_service, options=chrome_options)
-
-    # Double check that Selenium removes its own bot footprint
-    driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-        "userAgent": 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-    for lon, lat, st_id, name in stations:
-        monthly_total_mm = 0.0
-
-        url = f"https://www.wunderground.com/dashboard/pws/{st_id}/graph/{year}-{month:02d}-{num_days:02d}/{year}-{month:02d}-{num_days:02d}/monthly"
+    for s in station_data:
+        # --- THE FIX: Default to None (Offline) instead of 0.0 ---
+        monthly_total_mm = None
+        url = f"https://www.wunderground.com/dashboard/pws/{s['id']}/graph/{year}-{month:02d}-{num_days:02d}/{year}-{month:02d}-{num_days:02d}/monthly"
 
         try:
             driver.get(url)
-
-            WebDriverWait(driver, 30).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, ".summary-table, table, .dashboard__summary"))
-            )
-
+            WebDriverWait(driver, 25).until(EC.presence_of_element_located((By.CSS_SELECTOR, ".summary-table, table")))
             html = driver.page_source
-
-            # --- THE FIX: Wrapping the HTML string in StringIO ---
             tables = pd.read_html(StringIO(html))
 
             for df in tables:
                 df_str = df.astype(str)
-
                 if df_str.apply(lambda row: row.astype(str).str.contains('Precipitation', case=False).any(),
                                 axis=1).any():
                     precip_row = df[
                         df.apply(lambda row: row.astype(str).str.contains('Precipitation', case=False).any(), axis=1)]
-
                     if not precip_row.empty:
                         val_str = str(precip_row.iloc[0].values[1])
                         clean_val = ''.join(c for c in val_str if c.isdigit() or c == '.')
-
                         if clean_val:
                             val = float(clean_val)
-                            if 'in' in val_str.lower() or val < 30.0:
-                                monthly_total_mm = val * 25.4
-                            else:
-                                monthly_total_mm = val
+                            monthly_total_mm = val * 25.4 if ('in' in val_str.lower() or val < 30.0) else val
                             break
-
         except Exception as e:
-            st.warning(f"⚠️ Could not scrape {name}. Error: {str(e)[:100]}...")
+            # Silently catch the error, monthly_total_mm stays 'None'
+            pass
 
-        results.append([lon, lat, monthly_total_mm, name])
+        results.append([s['lon'], s['lat'], monthly_total_mm, s['name']])
 
     driver.quit()
-
     return np.array(results, dtype=object)
 
 
@@ -121,124 +97,193 @@ def scrape_monthly_data(year, month):
 # --- UI Layout ---
 # ==========================================
 st.set_page_config(page_title="Slemani EUD Dashboard", layout="wide")
-
 st.title("🗺️ Equivalent Uniform Depth (EUD) for Slemani")
 st.markdown("##### **Developed by: Hawber Ata**")
-st.markdown("Draw your catchment boundary on the map, then click Calculate to compute the area-weighted rainfall.")
 
 with st.sidebar:
-    st.header("Report Parameters")
-    selected_year = st.selectbox("Select Year", [2026, 2025, 2024])
-    selected_month = st.selectbox("Select Month", list(range(1, 13)), format_func=lambda x: calendar.month_name[x])
-    calc_method = st.radio("Calculation Method", ["Arithmetic Mean", "Thiessen Polygons (Geographic)"])
+    st.header("⚙️ Station Settings")
+    with st.expander("Add/Manage Stations"):
+        new_name = st.text_input("Station Name")
+        new_id = st.text_input("WU Station ID (e.g. IKANIS1)")
+        c1, c2 = st.columns(2)
+        new_lat = c1.number_input("Latitude", format="%.5f", value=35.5)
+        new_lon = c2.number_input("Longitude", format="%.5f", value=45.4)
+
+        if st.button("➕ Add Station to List"):
+            if new_id and new_name:
+                st.session_state.station_list.append({"lon": new_lon, "lat": new_lat, "id": new_id, "name": new_name})
+                st.rerun()
+
+        if st.button("🗑️ Reset to Default (4 Stations)"):
+            del st.session_state.station_list
+            st.rerun()
+
     st.divider()
+    st.header("Report Parameters")
+    selected_year = st.selectbox("Select Year", [2026, 2025, 2024], index=0)
+    selected_month = st.selectbox("Select Month", list(range(1, 13)), index=2,
+                                  format_func=lambda x: calendar.month_name[x])
+
+    # --- ADDED: The 3rd Isohyetal option in the radio button ---
+    calc_method = st.radio("Calculation Method",
+                           ["Arithmetic Mean", "Thiessen Polygons (Geographic)", "Isohyetal (IDW Interpolation)"],
+                           index=1)
+
     show_zones = st.checkbox("Show Station Influence Zones", value=True)
 
-# --- Setup Map and Geometry ---
-coords = np.array([s[:2] for s in stations], dtype=float)
-names = [s[3] for s in stations]
+# Process ALL Stations for Map Display
+all_coords = np.array([[s['lon'], s['lat']] for s in st.session_state.station_list])
+all_names = [s['name'] for s in st.session_state.station_list]
 
+# --- Setup Map ---
 map_state = st.session_state.get("catchment_map", {})
 active_drawing = map_state.get("last_active_drawing")
 
-if active_drawing is not None and active_drawing["geometry"]["type"] == "Polygon":
-    drawn_coords = active_drawing["geometry"]["coordinates"][0]
-    bounding_shape = ShapelyPolygon(drawn_coords)
+if active_drawing and active_drawing["geometry"]["type"] == "Polygon":
+    bounding_shape = ShapelyPolygon(active_drawing["geometry"]["coordinates"][0])
 else:
-    margin = 0.04
-    min_lon, max_lon = coords[:, 0].min() - margin, coords[:, 0].max() + margin
-    min_lat, max_lat = coords[:, 1].min() - margin, coords[:, 1].max() + margin
-    bounding_shape = box(min_lon, min_lat, max_lon, max_lat)
+    margin = 0.05
+    bounding_shape = box(all_coords[:, 0].min() - margin, all_coords[:, 1].min() - margin,
+                         all_coords[:, 0].max() + margin, all_coords[:, 1].max() + margin)
 
 m = folium.Map(location=[35.56, 45.41], zoom_start=12, tiles="CartoDB positron")
 
-if show_zones:
-    large_bbox = box(coords[:, 0].min() - 1, coords[:, 1].min() - 1, coords[:, 0].max() + 1, coords[:, 1].max() + 1)
-    points = MultiPoint([Point(lon, lat) for lon, lat in coords])
+if show_zones and len(all_coords) >= 2:
+    large_bbox = box(all_coords[:, 0].min() - 2, all_coords[:, 1].min() - 2, all_coords[:, 0].max() + 2,
+                     all_coords[:, 1].max() + 2)
+    points = MultiPoint([Point(x, y) for x, y in all_coords])
     voronoi_polys = voronoi_diagram(points, envelope=large_bbox)
-
-    colors = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99']
+    colors = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99', '#c2c2f0', '#ffb3e6', '#c4e17f']
 
     for poly in voronoi_polys.geoms:
         clipped_poly = poly.intersection(bounding_shape)
         if not clipped_poly.is_empty and clipped_poly.geom_type == 'Polygon':
-            centroid = clipped_poly.centroid
-            distances = [centroid.distance(Point(lon, lat)) for lon, lat in coords]
-            closest_idx = np.argmin(distances)
+            distances = [clipped_poly.centroid.distance(Point(x, y)) for x, y in all_coords]
+            idx = np.argmin(distances) % len(colors)
+            folium.Polygon(locations=[(y, x) for x, y in clipped_poly.exterior.coords], color="black", weight=1,
+                           fill=True, fill_color=colors[idx], fill_opacity=0.3).add_to(m)
 
-            folium_coords = [(y, x) for x, y in clipped_poly.exterior.coords]
-            folium.Polygon(
-                locations=folium_coords, color="black", weight=2,
-                fill=True, fill_color=colors[closest_idx], fill_opacity=0.4,
-                tooltip=f"{names[closest_idx]} Zone"
-            ).add_to(m)
-
-for i in range(len(coords)):
-    folium.Marker(
-        location=[coords[i, 1], coords[i, 0]], popup=names[i], tooltip=names[i],
-        icon=folium.Icon(color="darkblue", icon="cloud")
-    ).add_to(m)
+for s in st.session_state.station_list:
+    folium.Marker([s['lat'], s['lon']], tooltip=s['name'], icon=folium.Icon(color="darkblue", icon="cloud")).add_to(m)
 
 draw = Draw(
-    draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False},
-    edit_options={'edit': True, 'remove': True}
-)
+    draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False})
 m.add_child(draw)
 
 st.write("### 1. Define Catchment Area")
-st.info("Use the polygon tool to draw your catchment boundary. The scraper will run when you click Calculate.")
-
-map_output = st_folium(m, width=1000, height=500, key="catchment_map", returned_objects=["last_active_drawing"])
+st_folium(m, width=1000, height=500, key="catchment_map", returned_objects=["last_active_drawing"])
 
 st.divider()
 st.write("### 2. Precipitation Results")
 
-# ==========================================
-# --- Calculation & Scraping Block ---
-# ==========================================
 if st.button("🧮 Calculate EUD", type="primary", use_container_width=True):
+    with st.spinner("Extracting data..."):
+        # Scrape all stations
+        data = scrape_monthly_data(selected_year, selected_month, st.session_state.station_list)
 
-    with st.spinner(
-            f"Booting Web Scraper... Extracting data from Weather Underground for {calendar.month_name[selected_month]} {selected_year}..."):
-        data = scrape_monthly_data(selected_year, selected_month)
-        precip = np.array(data[:, 2], dtype=float)
+        # --- THE FIX: Filter out any station that returned 'None' ---
+        valid_data = [row for row in data if row[2] is not None]
 
-        cols = st.columns(4)
-        for i, col in enumerate(cols):
-            col.metric(label=names[i], value=f"{precip[i]:.2f} mm")
+        # Display the metrics for ALL stations so you know which ones failed
+        cols = st.columns(len(data))
+        for i, row in enumerate(data):
+            if row[2] is not None:
+                cols[i].metric(label=row[3], value=f"{row[2]:.2f} mm")
+            else:
+                cols[i].metric(label=row[3], value="Offline", delta="Excluded from math", delta_color="off")
 
-        if calc_method == "Arithmetic Mean":
-            arithmetic_eud = np.mean(precip)
-            st.success(f"**Final Arithmetic Mean EUD:** {arithmetic_eud:.2f} mm")
+        # If ALL stations are offline, stop the math!
+        if len(valid_data) == 0:
+            st.error("❌ All stations are offline or missing data for this month. Cannot calculate EUD.")
+        else:
+            # Rebuild the math arrays using ONLY the surviving, valid stations
+            active_precip = np.array([row[2] for row in valid_data], dtype=float)
+            active_coords = np.array([[row[0], row[1]] for row in valid_data], dtype=float)
+            active_names = [row[3] for row in valid_data]
 
-        elif calc_method == "Thiessen Polygons (Geographic)":
-            if active_drawing is not None:
-                with st.spinner("Calculating area weights..."):
+            if len(valid_data) < len(data):
+                st.warning(
+                    f"⚠️ Warning: {len(data) - len(valid_data)} station(s) were offline. The Thiessen network has automatically re-balanced using only the {len(valid_data)} active stations.")
+
+            if calc_method == "Arithmetic Mean":
+                st.success(f"**Final Arithmetic Mean EUD:** {np.mean(active_precip):.2f} mm")
+
+            elif calc_method == "Thiessen Polygons (Geographic)":
+                if active_drawing:
                     min_lon, min_lat, max_lon, max_lat = bounding_shape.bounds
-                    grid_lon, grid_lat = np.meshgrid(
-                        np.linspace(min_lon, max_lon, 150), np.linspace(min_lat, max_lat, 150)
-                    )
+                    grid_lon, grid_lat = np.meshgrid(np.linspace(min_lon, max_lon, 150),
+                                                     np.linspace(min_lat, max_lat, 150))
                     grid_points = np.c_[grid_lon.ravel(), grid_lat.ravel()]
-                    inside_points = [pt for pt in grid_points if bounding_shape.contains(Point(pt))]
-                    inside_points = np.array(inside_points)
+                    inside_points = np.array([pt for pt in grid_points if bounding_shape.contains(Point(pt))])
 
                     if len(inside_points) > 0:
-                        distances = cdist(inside_points, coords)
-                        closest_station = np.argmin(distances, axis=1)
+                        # Math now relies strictly on 'active_coords'
+                        closest_station = np.argmin(cdist(inside_points, active_coords), axis=1)
+                        thiessen_eud = sum(
+                            (np.sum(closest_station == i) / len(inside_points)) * active_precip[i] for i in
+                            range(len(active_coords)))
 
-                        thiessen_eud = 0.0
-                        st.write("#### Area Distribution within Catchment")
-                        area_cols = st.columns(4)
-
-                        for i in range(len(coords)):
+                        st.write("#### Active Area Distribution within Catchment")
+                        area_cols = st.columns(len(active_coords))
+                        for i in range(len(active_coords)):
                             area_fraction = np.sum(closest_station == i) / len(inside_points)
-                            thiessen_eud += area_fraction * precip[i]
-                            area_cols[i].caption(f"**{names[i]}:** {area_fraction * 100:.1f}%")
+                            area_cols[i].caption(f"**{active_names[i]}:** {area_fraction * 100:.1f}%")
 
-                        st.success(f"**Final Area-Weighted Thiessen EUD for Slemani:** {thiessen_eud:.2f} mm")
+                        st.success(f"**Final Area-Weighted Thiessen EUD:** {thiessen_eud:.2f} mm")
                     else:
                         st.warning("The drawn polygon is too small. Please draw a larger boundary.")
-            else:
-                st.warning("⚠️ Please draw a polygon on the map first, then click Calculate.")
-else:
-    st.caption("Waiting for calculation... Draw your boundary and click the button above.")
+                else:
+                    st.warning("⚠️ Please draw a polygon on the map first, then click Calculate.")
+
+            # --- ADDED: Isohyetal block with contour map generation ---
+            elif calc_method == "Isohyetal (IDW Interpolation)":
+                if active_drawing:
+                    min_lon, min_lat, max_lon, max_lat = bounding_shape.bounds
+                    grid_lon, grid_lat = np.meshgrid(np.linspace(min_lon, max_lon, 150),
+                                                     np.linspace(min_lat, max_lat, 150))
+                    grid_points = np.c_[grid_lon.ravel(), grid_lat.ravel()]
+
+                    # Create a boolean mask of points inside the drawn polygon
+                    mask = np.array([bounding_shape.contains(Point(pt)) for pt in grid_points])
+                    inside_points = grid_points[mask]
+
+                    if len(inside_points) > 0:
+                        # Inverse Distance Weighting math
+                        dist_matrix = cdist(inside_points, active_coords)
+                        dist_matrix = np.where(dist_matrix == 0, 1e-10, dist_matrix)  # Avoid division by zero
+                        weights = 1.0 / (dist_matrix ** 2)
+                        interpolated_values = np.sum(weights * active_precip, axis=1) / np.sum(weights, axis=1)
+
+                        isohyetal_eud = np.mean(interpolated_values)
+                        st.success(f"**Final Area-Weighted Isohyetal (IDW) EUD:** {isohyetal_eud:.2f} mm")
+
+                        st.write("#### Isohyetal Contour Map")
+
+                        # Build the contour plot
+                        fig, ax = plt.subplots(figsize=(8, 5))
+                        full_grid = np.full(grid_lon.shape, np.nan)
+                        full_grid.ravel()[mask] = interpolated_values
+
+                        cp = ax.contourf(grid_lon, grid_lat, full_grid, cmap='Blues', levels=15, alpha=0.8)
+                        plt.colorbar(cp, label='Precipitation (mm)')
+
+                        # Draw polygon boundary
+                        x, y = bounding_shape.exterior.xy
+                        ax.plot(x, y, color='#333333', linewidth=2, label='Catchment Boundary')
+
+                        # Plot stations
+                        ax.scatter(active_coords[:, 0], active_coords[:, 1], color='red', s=40, label='Stations',
+                                   zorder=5)
+                        for i, name in enumerate(active_names):
+                            ax.annotate(name, (active_coords[i, 0], active_coords[i, 1]),
+                                        textcoords="offset points", xytext=(5, 5), ha='left', fontsize=8)
+
+                        ax.set_xlabel("Longitude")
+                        ax.set_ylabel("Latitude")
+                        ax.legend()
+
+                        st.pyplot(fig)
+                    else:
+                        st.warning("The drawn polygon is too small. Please draw a larger boundary.")
+                else:
+                    st.warning("⚠️ Please draw a polygon on the map first, then click Calculate.")
