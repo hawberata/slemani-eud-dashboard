@@ -312,7 +312,7 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
                         full_grid = np.full(grid_lon.shape, np.nan)
                         full_grid.ravel()[mask] = interpolated_values
                         
-                        cp = ax.contourf(grid_lon, grid_lat, full_grid, cmap='Blues', levels=15, alpha=0.8)
+                        cp = ax.contourf(grid_lon, grid_lat, full_grid, cmap='Blues', levels=10, alpha=0.8)
                         plt.colorbar(cp, label='Precipitation (mm)')
                         
                         x, y = bounding_shape.exterior.xy
