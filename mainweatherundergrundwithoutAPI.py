@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import folium
 import platform
-import matplotlib.subplots as plt_sub 
+import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
 from datetime import datetime
 from io import StringIO
