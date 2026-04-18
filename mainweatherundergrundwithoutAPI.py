@@ -26,6 +26,14 @@ from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 
 # ==========================================
+# --- UI Layout / App Icon Settings ---
+# ==========================================
+st.set_page_config(
+    page_title="EUD Slemani", 
+    page_icon="🌧️", 
+    layout="wide"
+)
+# ==========================================
 # --- INITIAL STATION LIST ---
 # ==========================================
 if 'station_list' not in st.session_state:
