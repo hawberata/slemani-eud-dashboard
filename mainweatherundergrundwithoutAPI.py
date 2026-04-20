@@ -97,13 +97,11 @@ def scrape_weather_data(months_to_scrape, station_data):
     for s in station_data:
         accumulated_mm = 0.0
         valid_months_found = 0
-        
-        # --- ADDED: Dictionary to track each specific month ---
         monthly_breakdown = {}
 
         for y, m in months_to_scrape:
-            month_label = f"{calendar.month_abbr[m]} {y}" # e.g. "Jan 2026"
-            monthly_breakdown[month_label] = 0.0 # Default to 0
+            month_label = f"{calendar.month_abbr[m]} {y}" 
+            monthly_breakdown[month_label] = 0.0 
 
             _, num_days = calendar.monthrange(y, m)
             url = f"https://www.wunderground.com/dashboard/pws/{s['id']}/graph/{y}-{m:02d}-{num_days:02d}/{y}-{m:02d}-{num_days:02d}/monthly"
@@ -126,18 +124,17 @@ def scrape_weather_data(months_to_scrape, station_data):
                                 val_mm = val * 25.4 if 'in' in val_str.lower() else val
                                 
                                 accumulated_mm += val_mm
-                                monthly_breakdown[month_label] = val_mm # Save specific month
+                                monthly_breakdown[month_label] = val_mm 
                                 valid_months_found += 1
                                 break
             except Exception:
-                monthly_breakdown[month_label] = None # Mark as offline/missing
+                monthly_breakdown[month_label] = None 
 
         if valid_months_found == 0:
             final_total = None
         else:
             final_total = accumulated_mm
 
-        # Pass the new monthly_breakdown dictionary along with the other results
         results.append([s['lon'], s['lat'], final_total, s['name'], monthly_breakdown])
 
     driver.quit()
@@ -219,6 +216,7 @@ with st.sidebar:
         st.markdown("---")
 
     show_zones = st.checkbox("Show Station Influence Zones", value=True)
+    show_monthly_chart = st.checkbox("Show Monthly Bar Charts", value=True)
 
 active_stations = [s for s in st.session_state.station_list if s['active']]
 all_coords = np.array([[s['lon'], s['lat']] for s in active_stations])
@@ -295,17 +293,26 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
             chart_df = pd.DataFrame({"Precipitation (mm)": active_precip}, index=active_names)
             st.bar_chart(chart_df, color="#3366cc")
             
-            # --- ADDED: Monthly Breakdown Chart ---
-            if len(months_to_scrape) > 1:
+            if show_monthly_chart and len(months_to_scrape) > 1:
                 st.write("#### 📅 Monthly Breakdown per Station")
                 monthly_dict = {}
                 for row in valid_data:
                     station_name = row[3]
-                    station_months = row[4] # The new dictionary from the scraper
+                    station_months = row[4] 
                     monthly_dict[station_name] = station_months
                 
                 monthly_df = pd.DataFrame(monthly_dict)
-                st.bar_chart(monthly_df)
+                
+                # Side-by-Side Grouped Bar Chart using Matplotlib & Pandas
+                fig_bar, ax_bar = plt.subplots(figsize=(10, 5))
+                monthly_df.plot(kind='bar', ax=ax_bar, width=0.75, colormap='Set2')
+                
+                ax_bar.set_ylabel("Precipitation (mm)")
+                ax_bar.set_xlabel("Month")
+                plt.xticks(rotation=45, ha='right') 
+                ax_bar.legend(title="Stations", bbox_to_anchor=(1.05, 1), loc='upper left')
+                
+                st.pyplot(fig_bar)
                 
             st.markdown("---")
 
