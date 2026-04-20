@@ -5,7 +5,6 @@ import pandas as pd
 import folium
 import platform
 import matplotlib.pyplot as plt
-import matplotlib.pyplot as plt
 from datetime import datetime
 from io import StringIO
 from folium.plugins import Draw
@@ -33,16 +32,21 @@ st.set_page_config(
     page_icon="🌧️", 
     layout="wide"
 )
+
 # ==========================================
 # --- INITIAL STATION LIST ---
 # ==========================================
 if 'station_list' not in st.session_state:
     st.session_state.station_list = [
-        {"lon": 45.48, "lat": 35.55, "id": "IKANIS1", "name": "Hawber Station"},
-        {"lon": 45.37, "lat": 35.58, "id": "IQALIA1", "name": "UOS-new campus"},
-        {"lon": 45.36, "lat": 35.54, "id": "I90583621", "name": "UOS-Bakrajo"},
-        {"lon": 45.44, "lat": 35.57, "id": "I90583618", "name": "UOS-oldcampus"}
+        {"lon": 45.48, "lat": 35.55, "id": "IKANIS1", "name": "Hawber Station", "active": True},
+        {"lon": 45.37, "lat": 35.58, "id": "IQALIA1", "name": "UOS-new campus", "active": True},
+        {"lon": 45.36, "lat": 35.54, "id": "I90583621", "name": "UOS-Bakrajo", "active": True},
+        {"lon": 45.44, "lat": 35.57, "id": "I90583618", "name": "UOS-oldcampus", "active": True}
     ]
+else:
+    for s in st.session_state.station_list:
+        if 'active' not in s:
+            s['active'] = True
 
 # --- HELPER: Generate a list of (Year, Month) tuples between two dates ---
 def get_month_year_range(start_year, start_month, end_year, end_month):
@@ -93,8 +97,14 @@ def scrape_weather_data(months_to_scrape, station_data):
     for s in station_data:
         accumulated_mm = 0.0
         valid_months_found = 0
+        
+        # --- ADDED: Dictionary to track each specific month ---
+        monthly_breakdown = {}
 
         for y, m in months_to_scrape:
+            month_label = f"{calendar.month_abbr[m]} {y}" # e.g. "Jan 2026"
+            monthly_breakdown[month_label] = 0.0 # Default to 0
+
             _, num_days = calendar.monthrange(y, m)
             url = f"https://www.wunderground.com/dashboard/pws/{s['id']}/graph/{y}-{m:02d}-{num_days:02d}/{y}-{m:02d}-{num_days:02d}/monthly"
 
@@ -114,31 +124,39 @@ def scrape_weather_data(months_to_scrape, station_data):
                             if clean_val:
                                 val = float(clean_val)
                                 val_mm = val * 25.4 if 'in' in val_str.lower() else val
+                                
                                 accumulated_mm += val_mm
+                                monthly_breakdown[month_label] = val_mm # Save specific month
                                 valid_months_found += 1
                                 break
             except Exception:
-                pass 
+                monthly_breakdown[month_label] = None # Mark as offline/missing
 
         if valid_months_found == 0:
             final_total = None
         else:
             final_total = accumulated_mm
 
-        results.append([s['lon'], s['lat'], final_total, s['name']])
+        # Pass the new monthly_breakdown dictionary along with the other results
+        results.append([s['lon'], s['lat'], final_total, s['name'], monthly_breakdown])
 
     driver.quit()
     return np.array(results, dtype=object)
 
-# ==========================================
-# --- UI Layout ---
-# ==========================================
-st.set_page_config(page_title="Slemani EUD Dashboard", layout="wide")
 st.title("🗺️ Equivalent Uniform Depth (EUD) for Slemani")
 st.markdown("##### **Developed by: Hawber Ata**")
 
 with st.sidebar:
     st.header("⚙️ Station Settings")
+    
+    st.write("**Select Active Stations:**")
+    for i, s in enumerate(st.session_state.station_list):
+        st.session_state.station_list[i]['active'] = st.checkbox(
+            f"{s['name']} ({s['id']})", 
+            value=s['active'], 
+            key=f"chk_{i}"
+        )
+    
     with st.expander("Add/Manage Stations"):
         new_name = st.text_input("Station Name")
         new_id = st.text_input("WU Station ID (e.g. IKANIS1)")
@@ -148,7 +166,7 @@ with st.sidebar:
 
         if st.button("➕ Add Station to List"):
             if new_id and new_name:
-                st.session_state.station_list.append({"lon": new_lon, "lat": new_lat, "id": new_id, "name": new_name})
+                st.session_state.station_list.append({"lon": new_lon, "lat": new_lat, "id": new_id, "name": new_name, "active": True})
                 st.rerun()
 
         if st.button("🗑️ Reset to Default (4 Stations)"):
@@ -162,7 +180,6 @@ with st.sidebar:
     months_to_scrape = [] 
     
     if time_period == "Single Month":
-        # --- ADDED 2022 HERE ---
         selected_year = st.selectbox("Select Year", [2026, 2025, 2024, 2023, 2022], index=0)
         selected_month = st.selectbox("Select Month", list(range(1, 13)), index=2, format_func=lambda x: calendar.month_name[x])
         months_to_scrape = [(selected_year, selected_month)]
@@ -172,12 +189,10 @@ with st.sidebar:
         with colA:
             st.write("**Start Date**")
             start_month = st.selectbox("Start Month", list(range(1, 13)), index=8, format_func=lambda x: calendar.month_name[x]) 
-            # --- ADDED 2022 HERE ---
             start_year = st.selectbox("Start Year", [2026, 2025, 2024, 2023, 2022], index=1)
         with colB:
             st.write("**End Date**")
             end_month = st.selectbox("End Month", list(range(1, 13)), index=4, format_func=lambda x: calendar.month_name[x]) 
-            # --- ADDED 2022 HERE ---
             end_year = st.selectbox("End Year", [2026, 2025, 2024, 2023, 2022], index=0)
             
         months_to_scrape = get_month_year_range(start_year, start_month, end_year, end_month)
@@ -205,59 +220,61 @@ with st.sidebar:
 
     show_zones = st.checkbox("Show Station Influence Zones", value=True)
 
-# Process ALL Stations for Map Display
-all_coords = np.array([[s['lon'], s['lat']] for s in st.session_state.station_list])
-all_names = [s['name'] for s in st.session_state.station_list]
+active_stations = [s for s in st.session_state.station_list if s['active']]
+all_coords = np.array([[s['lon'], s['lat']] for s in active_stations])
+all_names = [s['name'] for s in active_stations]
 
-# --- Setup Map ---
 map_state = st.session_state.get("catchment_map", {})
 active_drawing = map_state.get("last_active_drawing")
 
-if active_drawing and active_drawing["geometry"]["type"] == "Polygon":
-    bounding_shape = ShapelyPolygon(active_drawing["geometry"]["coordinates"][0])
+if len(all_coords) > 0:
+    if active_drawing and active_drawing["geometry"]["type"] == "Polygon":
+        bounding_shape = ShapelyPolygon(active_drawing["geometry"]["coordinates"][0])
+    else:
+        margin = 0.05
+        bounding_shape = box(all_coords[:, 0].min() - margin, all_coords[:, 1].min() - margin,
+                             all_coords[:, 0].max() + margin, all_coords[:, 1].max() + margin)
+
+    m = folium.Map(location=[35.56, 45.41], zoom_start=12, tiles="CartoDB positron")
+
+    if show_zones and len(all_coords) >= 2:
+        large_bbox = box(all_coords[:, 0].min() - 2, all_coords[:, 1].min() - 2, all_coords[:, 0].max() + 2,
+                         all_coords[:, 1].max() + 2)
+        points = MultiPoint([Point(x, y) for x, y in all_coords])
+        voronoi_polys = voronoi_diagram(points, envelope=large_bbox)
+        colors = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99', '#c2c2f0', '#ffb3e6', '#c4e17f']
+
+        for poly in voronoi_polys.geoms:
+            clipped_poly = poly.intersection(bounding_shape)
+            if not clipped_poly.is_empty and clipped_poly.geom_type == 'Polygon':
+                distances = [clipped_poly.centroid.distance(Point(x, y)) for x, y in all_coords]
+                idx = np.argmin(distances) % len(colors)
+                folium.Polygon(locations=[(y, x) for x, y in clipped_poly.exterior.coords], color="black", weight=1,
+                               fill=True, fill_color=colors[idx], fill_opacity=0.3).add_to(m)
+
+    for s in active_stations:
+        folium.Marker([s['lat'], s['lon']], tooltip=s['name'], icon=folium.Icon(color="darkblue", icon="cloud")).add_to(m)
+
+    draw = Draw(
+        draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False})
+    m.add_child(draw)
+
+    st.write("### 1. Define Catchment Area")
+    st_folium(m, width=1000, height=500, key="catchment_map", returned_objects=["last_active_drawing"])
 else:
-    margin = 0.05
-    bounding_shape = box(all_coords[:, 0].min() - margin, all_coords[:, 1].min() - margin,
-                         all_coords[:, 0].max() + margin, all_coords[:, 1].max() + margin)
-
-m = folium.Map(location=[35.56, 45.64], zoom_start=11, tiles="CartoDB positron")
-
-if show_zones and len(all_coords) >= 2:
-    large_bbox = box(all_coords[:, 0].min() - 2, all_coords[:, 1].min() - 2, all_coords[:, 0].max() + 2,
-                     all_coords[:, 1].max() + 2)
-    points = MultiPoint([Point(x, y) for x, y in all_coords])
-    voronoi_polys = voronoi_diagram(points, envelope=large_bbox)
-    colors = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99', '#c2c2f0', '#ffb3e6', '#c4e17f']
-
-    for poly in voronoi_polys.geoms:
-        clipped_poly = poly.intersection(bounding_shape)
-        if not clipped_poly.is_empty and clipped_poly.geom_type == 'Polygon':
-            distances = [clipped_poly.centroid.distance(Point(x, y)) for x, y in all_coords]
-            idx = np.argmin(distances) % len(colors)
-            folium.Polygon(locations=[(y, x) for x, y in clipped_poly.exterior.coords], color="black", weight=1,
-                           fill=True, fill_color=colors[idx], fill_opacity=0.3).add_to(m)
-
-for s in st.session_state.station_list:
-    folium.Marker([s['lat'], s['lon']], tooltip=s['name'], icon=folium.Icon(color="darkblue", icon="cloud")).add_to(m)
-
-draw = Draw(
-    draw_options={'polyline': False, 'rectangle': False, 'circle': False, 'marker': False, 'circlemarker': False})
-m.add_child(draw)
-
-st.write("### 1. Define Catchment Area")
-st_folium(m, width=1000, height=500, key="catchment_map", returned_objects=["last_active_drawing"])
+    st.warning("⚠️ Please select at least one active station from the sidebar to view the map.")
 
 st.divider()
 st.write("### 2. Precipitation Results")
 
-calc_disabled = len(months_to_scrape) == 0
+calc_disabled = len(months_to_scrape) == 0 or len(active_stations) == 0
 
 if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, disabled=calc_disabled):
     
-    loading_msg = f"Extracting {len(months_to_scrape)} months of data for all stations (this may take a few minutes)..."
+    loading_msg = f"Extracting {len(months_to_scrape)} months of data for {len(active_stations)} active stations..."
     
     with st.spinner(loading_msg):
-        data = scrape_weather_data(months_to_scrape, st.session_state.station_list)
+        data = scrape_weather_data(months_to_scrape, active_stations)
         valid_data = [row for row in data if row[2] is not None]
 
         cols = st.columns(len(data))
@@ -268,11 +285,29 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
                 cols[i].metric(label=row[3], value="Offline", delta="No data found", delta_color="off")
 
         if len(valid_data) == 0:
-            st.error("❌ All stations are offline or missing data in this timeframe. Cannot calculate EUD.")
+            st.error("❌ All active stations are offline or missing data in this timeframe. Cannot calculate EUD.")
         else:
             active_precip = np.array([row[2] for row in valid_data], dtype=float)
             active_coords = np.array([[row[0], row[1]] for row in valid_data], dtype=float)
             active_names = [row[3] for row in valid_data]
+            
+            st.write("#### 📊 Total Precipitation per Station")
+            chart_df = pd.DataFrame({"Precipitation (mm)": active_precip}, index=active_names)
+            st.bar_chart(chart_df, color="#3366cc")
+            
+            # --- ADDED: Monthly Breakdown Chart ---
+            if len(months_to_scrape) > 1:
+                st.write("#### 📅 Monthly Breakdown per Station")
+                monthly_dict = {}
+                for row in valid_data:
+                    station_name = row[3]
+                    station_months = row[4] # The new dictionary from the scraper
+                    monthly_dict[station_name] = station_months
+                
+                monthly_df = pd.DataFrame(monthly_dict)
+                st.bar_chart(monthly_df)
+                
+            st.markdown("---")
 
             if len(valid_data) < len(data):
                 st.warning(
@@ -318,7 +353,10 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
                     inside_points = grid_points[mask]
 
                     if len(inside_points) > 0:
-                        
+                        if len(active_coords) < 3 and "RBF" in interp_type:
+                            st.warning("⚠️ RBF requires at least 3 active stations. Falling back to IDW.")
+                            interp_type = "IDW"
+
                         if "IDW" in interp_type:
                             dist_matrix = cdist(inside_points, active_coords)
                             dist_matrix = np.where(dist_matrix == 0, 1e-10, dist_matrix)
