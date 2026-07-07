@@ -17,6 +17,7 @@ from shapely.ops import voronoi_diagram
 # --- SCRAPING IMPORTS ---
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -83,12 +84,16 @@ def scrape_weather_data(months_to_scrape, station_data):
     chrome_options.add_argument("--disable-gpu")
     chrome_options.page_load_strategy = 'eager'
 
-    # If running on Streamlit Cloud (Linux), point directly to the system Chromium binary
+    # Check if running on Streamlit Cloud (Linux)
     if platform.system() == "Linux":
+        # Explicitly point to the system browser and driver installed via packages.txt
         chrome_options.binary_location = '/usr/bin/chromium'
-
-    # Initialize Chrome. Selenium's built-in manager will automatically handle the driver context.
-    driver = webdriver.Chrome(options=chrome_options)
+        service = Service('/usr/bin/chromedriver')
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+    else:
+        # Fallback for local development
+        driver = webdriver.Chrome(options=chrome_options)
+        
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
     for s in station_data:
@@ -401,3 +406,4 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
                         st.warning("The drawn polygon is too small. Please draw a larger boundary.")
                 else:
                     st.warning("⚠️ Please draw a polygon on the map first, then click Calculate.")
+
