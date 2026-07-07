@@ -5,6 +5,7 @@ import pandas as pd
 import folium
 import platform
 import matplotlib.pyplot as plt
+import shutil
 from datetime import datetime
 from io import StringIO
 from folium.plugins import Draw
@@ -78,7 +79,8 @@ def scrape_weather_data(months_to_scrape, station_data):
     results = []
     
     chrome_options = Options()
-    chrome_options.add_argument("--headless")
+    # Use the new headless mode required by newer Chromium versions
+    chrome_options.add_argument("--headless=new") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
@@ -86,9 +88,12 @@ def scrape_weather_data(months_to_scrape, station_data):
 
     # Check if running on Streamlit Cloud (Linux)
     if platform.system() == "Linux":
-        # Explicitly point to the system browser and driver installed via packages.txt
-        chrome_options.binary_location = '/usr/bin/chromium'
-        service = Service('/usr/bin/chromedriver')
+        # Dynamically hunt for the installed browser and driver paths
+        browser_path = shutil.which('chromium') or shutil.which('chromium-browser') or '/usr/bin/chromium'
+        driver_path = shutil.which('chromedriver') or '/usr/bin/chromedriver'
+        
+        chrome_options.binary_location = browser_path
+        service = Service(driver_path)
         driver = webdriver.Chrome(service=service, options=chrome_options)
     else:
         # Fallback for local development
