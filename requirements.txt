@@ -5,7 +5,7 @@ folium
 streamlit-folium
 scipy
 shapely
-selenium
+selenium>=4.11.0
 beautifulsoup4
 lxml
 requests
