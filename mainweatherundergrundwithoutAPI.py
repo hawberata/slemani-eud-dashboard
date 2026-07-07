@@ -16,13 +16,10 @@ from shapely.ops import voronoi_diagram
 
 # --- SCRAPING IMPORTS ---
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
 
 # ==========================================
 # --- UI Layout / App Icon Settings ---
@@ -86,12 +83,12 @@ def scrape_weather_data(months_to_scrape, station_data):
     chrome_options.add_argument("--disable-gpu")
     chrome_options.page_load_strategy = 'eager'
 
+    # If running on Streamlit Cloud (Linux), point directly to the system Chromium binary
     if platform.system() == "Linux":
-        driver_service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
-    else:
-        driver_service = Service(ChromeDriverManager().install())
+        chrome_options.binary_location = '/usr/bin/chromium'
 
-    driver = webdriver.Chrome(service=driver_service, options=chrome_options)
+    # Initialize Chrome. Selenium's built-in manager will automatically handle the driver context.
+    driver = webdriver.Chrome(options=chrome_options)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
     for s in station_data:
