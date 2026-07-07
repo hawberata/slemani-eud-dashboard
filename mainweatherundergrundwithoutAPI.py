@@ -3,9 +3,7 @@ import calendar
 import numpy as np
 import pandas as pd
 import folium
-import platform
 import matplotlib.pyplot as plt
-import shutil
 from datetime import datetime
 from io import StringIO
 from folium.plugins import Draw
@@ -17,8 +15,7 @@ from shapely.ops import voronoi_diagram
 
 # --- SCRAPING IMPORTS ---
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -78,26 +75,17 @@ def get_month_year_range(start_year, start_month, end_year, end_month):
 def scrape_weather_data(months_to_scrape, station_data):
     results = []
     
-    chrome_options = Options()
-    # Use the new headless mode required by newer Chromium versions
-    chrome_options.add_argument("--headless=new") 
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.page_load_strategy = 'eager'
+    # Switch to Firefox Options
+    firefox_options = Options()
+    firefox_options.add_argument("--headless")
+    
+    # Firefox-specific tweaks to mimic real browser behavior
+    firefox_options.set_preference("dom.webdriver.enabled", False)
+    firefox_options.set_preference("useAutomationExtension", False)
+    firefox_options.page_load_strategy = 'eager'
 
-    # Check if running on Streamlit Cloud (Linux)
-    if platform.system() == "Linux":
-        # Dynamically hunt for the installed browser and driver paths
-        browser_path = shutil.which('chromium') or shutil.which('chromium-browser') or '/usr/bin/chromium'
-        driver_path = shutil.which('chromedriver') or '/usr/bin/chromedriver'
-        
-        chrome_options.binary_location = browser_path
-        service = Service(driver_path)
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-    else:
-        # Fallback for local development
-        driver = webdriver.Chrome(options=chrome_options)
+    # Initialize Firefox. Selenium Manager handles the geckodriver download automatically!
+    driver = webdriver.Firefox(options=firefox_options)
         
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
@@ -411,4 +399,3 @@ if st.button("🧮 Calculate EUD", type="primary", use_container_width=True, dis
                         st.warning("The drawn polygon is too small. Please draw a larger boundary.")
                 else:
                     st.warning("⚠️ Please draw a polygon on the map first, then click Calculate.")
-
